@@ -1,4 +1,4 @@
-/** TimeTree-Exporter が出力する ICS イベントをパースした結果 */
+/** Evento procedente de TimeTree Exporter */
 export interface CalendarEvent {
   uid: string;
   summary: string;
@@ -9,23 +9,23 @@ export interface CalendarEvent {
   allDay: boolean;
   recurrence: string[];
   lastModified: Date | null;
+  category: string;
+  color: string;
 }
 
-/** Google Calendar に同期済みのイベント情報 */
 export interface SyncedEvent {
   googleEventId: string;
   timetreeUid: string;
-  lastModified: string; // ISO string
+  lastModified: string;
+  colorId: string;
 }
 
-/** 差分計算の結果 */
 export interface SyncDiff {
   toCreate: CalendarEvent[];
   toUpdate: { source: CalendarEvent; googleEventId: string }[];
   toDelete: { googleEventId: string; timetreeUid: string }[];
 }
 
-/** 同期結果 */
 export interface SyncResult {
   created: number;
   updated: number;
@@ -33,7 +33,6 @@ export interface SyncResult {
   errors: number;
 }
 
-/** 環境変数から読み込む設定 */
 export interface Config {
   timetreeEmail: string;
   timetreePassword: string;
