@@ -4,6 +4,8 @@ import { GoogleAuth } from "googleapis-common";
 import type { CalendarEvent, SyncedEvent } from "./types.js";
 
 const SYNC_TAG = "timetree-gcal-sync";
+const SYNC_VERSION = "2";
+const VERSION_SUFFIX = "|category-v2";
 
 const CATEGORY_COLORS: Record<string, string> = {
   "BODAS/EVENTOS": "10",
@@ -26,6 +28,13 @@ export function getGoogleColorId(
   ];
 }
 
+export function getSourceSyncVersion(
+  event: CalendarEvent
+): string {
+  const modified = event.lastModified?.toISOString() ?? "";
+  return modified + VERSION_SUFFIX;
+}
+
 export class GCalClient {
   private calendar: calendar_v3.Calendar;
   private calendarId: string;
@@ -36,9 +45,7 @@ export class GCalClient {
   ) {
     const auth = new GoogleAuth({
       credentials,
-      scopes: [
-        "https://www.googleapis.com/auth/calendar",
-      ],
+      scopes: ["https://www.googleapis.com/auth/calendar"],
     });
 
     this.calendar = google.calendar({
@@ -56,9 +63,7 @@ export class GCalClient {
     do {
       const res = await this.calendar.events.list({
         calendarId: this.calendarId,
-        privateExtendedProperty: [
-          `syncedBy=${SYNC_TAG}`,
-        ],
+        privateExtendedProperty: [`syncedBy=${SYNC_TAG}`],
         maxResults: 2500,
         pageToken,
         showDeleted: false,
@@ -66,36 +71,41 @@ export class GCalClient {
       });
 
       for (const item of res.data.items ?? []) {
-        const props =
-          item.extendedProperties?.private ?? {};
+        const props = item.extendedProperties?.private ?? {};
 
         if (props.timetreeUid && item.id) {
+          const modified = props.timetreeLastModified ?? "";
+          const versionedModified =
+            props.syncSchemaVersion === SYNC_VERSION
+              ? modified + VERSION_SUFFIX
+              : modified;
+
           events.push({
             googleEventId: item.id,
             timetreeUid: props.timetreeUid,
-            lastModified:
-              props.timetreeLastModified ?? "",
+            lastModified: versionedModified,
             colorId: item.colorId ?? "",
           });
         }
       }
 
-      pageToken =
-        res.data.nextPageToken ?? undefined;
+      pageToken = res.data.nextPageToken ?? undefined;
     } while (pageToken);
 
     return events;
   }
 
-  async createEvent(
-    event: CalendarEvent
-  ): Promise<string> {
+  async createEvent(event: CalendarEvent): Promise<string> {
     const res = await this.calendar.events.insert({
       calendarId: this.calendarId,
       requestBody: this.toGCalEvent(event),
     });
 
-    return res.data.id!;
+    if (!res.data.id) {
+      throw new Error("Google Calendar returned no event ID.");
+    }
+
+    return res.data.id;
   }
 
   async updateEvent(
@@ -109,9 +119,7 @@ export class GCalClient {
     });
   }
 
-  async deleteEvent(
-    googleEventId: string
-  ): Promise<void> {
+  async deleteEvent(googleEventId: string): Promise<void> {
     await this.calendar.events.delete({
       calendarId: this.calendarId,
       eventId: googleEventId,
@@ -125,9 +133,7 @@ export class GCalClient {
 
     const description = [
       event.description,
-      category
-        ? `Categoría TimeTree: ${category}`
-        : "",
+      category ? `Categoría TimeTree: ${category}` : "",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -144,18 +150,14 @@ export class GCalClient {
           timetreeUid: event.uid,
           timetreeLastModified:
             event.lastModified?.toISOString() ?? "",
+          syncSchemaVersion: SYNC_VERSION,
         },
       },
     };
 
     if (event.allDay) {
-      body.start = {
-        date: formatDate(event.start),
-      };
-
-      body.end = {
-        date: formatDate(event.end),
-      };
+      body.start = { date: formatDate(event.start) };
+      body.end = { date: formatDate(event.end) };
     } else {
       body.start = {
         dateTime: event.start.toISOString(),
