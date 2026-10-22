@@ -1,140 +1,188 @@
 
-import {
-  getGoogleColorId,
-  getSourceSyncVersion,
-  type GCalClient,
-} from "./gcal-client.js";
+import { google, type calendar_v3 } from "googleapis";
+import { GoogleAuth } from "googleapis-common";
+import type { CalendarEvent, SyncedEvent } from "./types.js";
 
-import type {
-  CalendarEvent,
-  SyncDiff,
-  SyncResult,
-  SyncedEvent,
-} from "./types.js";
+const SYNC_TAG = "timetree-gcal-sync";
+const SYNC_VERSION = "2";
+const VERSION_SUFFIX = "|category-v2";
 
-export class SyncEngine {
-  constructor(private gcal: GCalClient) {}
+const CATEGORY_COLORS: Record<string, string> = {
+  "BODAS/EVENTOS": "10",
+  "VIAJES": "7",
+  "DEPORTE": "9",
+  "TRABAJO JUANITO": "8",
+  "BASKET JUANI": "6",
+  "COSAS CASA / FURGOS": "3",
+  "TRABAJO CRIS": "4",
+  "CITAS": "11",
+  "GUARDIAS CRIS": "5",
+  "VACAS/FESTIVOS": "1",
+};
 
-  computeDiff(
-    sourceEvents: CalendarEvent[],
-    syncedEvents: SyncedEvent[]
-  ): SyncDiff {
-    const syncedMap = new Map<string, SyncedEvent>();
+export function getGoogleColorId(
+  event: CalendarEvent
+): string | undefined {
+  return CATEGORY_COLORS[
+    (event.category ?? "").trim().toUpperCase()
+  ];
+}
 
-    for (const event of syncedEvents) {
-      syncedMap.set(event.timetreeUid, event);
-    }
+export function getSourceSyncVersion(
+  event: CalendarEvent
+): string {
+  const modified = event.lastModified?.toISOString() ?? "";
+  return modified + VERSION_SUFFIX;
+}
 
-    const sourceUids = new Set<string>();
-    const toCreate: CalendarEvent[] = [];
-    const toUpdate: SyncDiff["toUpdate"] = [];
+export class GCalClient {
+  private calendar: calendar_v3.Calendar;
+  private calendarId: string;
 
-    for (const event of sourceEvents) {
-      sourceUids.add(event.uid);
+  constructor(
+    credentials: Record<string, unknown>,
+    calendarId: string
+  ) {
+    const auth = new GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/calendar"],
+    });
 
-      const existing = syncedMap.get(event.uid);
+    this.calendar = google.calendar({
+      version: "v3",
+      auth,
+    });
 
-      if (!existing) {
-        toCreate.push(event);
-        continue;
-      }
-
-      const desiredColor = getGoogleColorId(event);
-
-      const colorChanged =
-        desiredColor !== undefined &&
-        desiredColor !== existing.colorId;
-
-      const contentChanged =
-        getSourceSyncVersion(event) !== existing.lastModified;
-
-      if (contentChanged || colorChanged) {
-        toUpdate.push({
-          source: event,
-          googleEventId: existing.googleEventId,
-        });
-      }
-    }
-
-    const toDelete: SyncDiff["toDelete"] = [];
-
-    for (const event of syncedEvents) {
-      if (!sourceUids.has(event.timetreeUid)) {
-        toDelete.push({
-          googleEventId: event.googleEventId,
-          timetreeUid: event.timetreeUid,
-        });
-      }
-    }
-
-    return {
-      toCreate,
-      toUpdate,
-      toDelete,
-    };
+    this.calendarId = calendarId;
   }
 
-  async applyDiff(diff: SyncDiff): Promise<SyncResult> {
-    if (
-      process.env.SYNC_DRY_RUN !== "false" ||
-      process.env.SYNC_ENABLE_WRITE !== "YES_I_APPROVE"
-    ) {
-      console.log("DRY RUN: no changes made.");
+  async listSyncedEvents(): Promise<SyncedEvent[]> {
+    const events: SyncedEvent[] = [];
+    let pageToken: string | undefined;
 
-      return {
-        created: 0,
-        updated: 0,
-        deleted: 0,
-        errors: 0,
+    do {
+      const res = await this.calendar.events.list({
+        calendarId: this.calendarId,
+        privateExtendedProperty: [`syncedBy=${SYNC_TAG}`],
+        maxResults: 2500,
+        pageToken,
+        showDeleted: false,
+        singleEvents: false,
+      });
+
+      for (const item of res.data.items ?? []) {
+        const props = item.extendedProperties?.private ?? {};
+
+        if (props.timetreeUid && item.id) {
+          const modified = props.timetreeLastModified ?? "";
+
+          const versionedModified =
+            props.syncSchemaVersion === SYNC_VERSION
+              ? modified + VERSION_SUFFIX
+              : modified;
+
+          events.push({
+            googleEventId: item.id,
+            timetreeUid: props.timetreeUid,
+            lastModified: versionedModified,
+            colorId: item.colorId ?? "",
+          });
+        }
+      }
+
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+
+    return events;
+  }
+
+  async createEvent(event: CalendarEvent): Promise<string> {
+    const res = await this.calendar.events.insert({
+      calendarId: this.calendarId,
+      requestBody: this.toGCalEvent(event),
+    });
+
+    if (!res.data.id) {
+      throw new Error("Google Calendar returned no event ID.");
+    }
+
+    return res.data.id;
+  }
+
+  async updateEvent(
+    googleEventId: string,
+    event: CalendarEvent
+  ): Promise<void> {
+    await this.calendar.events.patch({
+      calendarId: this.calendarId,
+      eventId: googleEventId,
+      requestBody: this.toGCalEvent(event),
+    });
+  }
+
+  async deleteEvent(googleEventId: string): Promise<void> {
+    await this.calendar.events.delete({
+      calendarId: this.calendarId,
+      eventId: googleEventId,
+    });
+  }
+
+  private toGCalEvent(
+    event: CalendarEvent
+  ): calendar_v3.Schema$Event {
+    const category = (event.category ?? "").trim();
+
+    const description = [
+      event.description,
+      category ? `Categoría TimeTree: ${category}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const body: calendar_v3.Schema$Event = {
+      summary: event.summary,
+      description: description || undefined,
+      location: event.location || undefined,
+      colorId: getGoogleColorId(event),
+
+      extendedProperties: {
+        private: {
+          syncedBy: SYNC_TAG,
+          timetreeUid: event.uid,
+          timetreeLastModified:
+            event.lastModified?.toISOString() ?? "",
+          syncSchemaVersion: SYNC_VERSION,
+        },
+      },
+    };
+
+    if (event.allDay) {
+      body.start = { date: formatDate(event.start) };
+      body.end = { date: formatDate(event.end) };
+    } else {
+      body.start = {
+        dateTime: event.start.toISOString(),
+        timeZone: "Europe/Madrid",
+      };
+
+      body.end = {
+        dateTime: event.end.toISOString(),
+        timeZone: "Europe/Madrid",
       };
     }
 
-    const result: SyncResult = {
-      created: 0,
-      updated: 0,
-      deleted: 0,
-      errors: 0,
-    };
-
-    for (const event of diff.toCreate) {
-      try {
-        await this.gcal.createEvent(event);
-        result.created++;
-        console.log(`Created: ${event.summary}`);
-      } catch (error) {
-        result.errors++;
-        console.error(
-          `Failed to create "${event.summary}":`,
-          error
-        );
-      }
+    if (event.recurrence.length > 0) {
+      body.recurrence = event.recurrence;
     }
 
-    for (const item of diff.toUpdate) {
-      try {
-        await this.gcal.updateEvent(
-          item.googleEventId,
-          item.source
-        );
-
-        result.updated++;
-        console.log(`Updated: ${item.source.summary}`);
-      } catch (error) {
-        result.errors++;
-        console.error(
-          `Failed to update "${item.source.summary}":`,
-          error
-        );
-      }
-    }
-
-    // Nunca eliminar eventos automáticamente.
-    if (diff.toDelete.length > 0) {
-      console.log(
-        `Skipped ${diff.toDelete.length} deletions.`
-      );
-    }
-
-    return result;
+    return body;
   }
+}
+
+function formatDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+
+  return `${y}-${m}-${d}`;
 }
