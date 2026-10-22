@@ -57,11 +57,11 @@ jobs:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/google-credentials.json
 
-          # SIMULACIÓN: no modificar Google Calendar
-          SYNC_DRY_RUN: "true"
-
-          # Protección adicional
+          # Sincronización real
+          SYNC_DRY_RUN: "false"
           SYNC_ENABLE_WRITE: "YES_I_APPROVE"
+
+          # Eliminaciones desactivadas
           ALLOW_DELETIONS: "false"
 
         run: npx tsx src/index.ts
