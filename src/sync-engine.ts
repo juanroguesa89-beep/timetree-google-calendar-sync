@@ -1,5 +1,9 @@
 
-import { getGoogleColorId, type GCalClient } from "./gcal-client.js";
+import {
+  getGoogleColorId,
+  type GCalClient,
+} from "./gcal-client.js";
+
 import type {
   CalendarEvent,
   SyncDiff,
@@ -16,8 +20,8 @@ export class SyncEngine {
   ): SyncDiff {
     const syncedMap = new Map<string, SyncedEvent>();
 
-    for (const se of syncedEvents) {
-      syncedMap.set(se.timetreeUid, se);
+    for (const event of syncedEvents) {
+      syncedMap.set(event.timetreeUid, event);
     }
 
     const sourceUids = new Set<string>();
@@ -56,23 +60,28 @@ export class SyncEngine {
 
     const toDelete: SyncDiff["toDelete"] = [];
 
-    for (const se of syncedEvents) {
-      if (!sourceUids.has(se.timetreeUid)) {
+    for (const event of syncedEvents) {
+      if (!sourceUids.has(event.timetreeUid)) {
         toDelete.push({
-          googleEventId: se.googleEventId,
-          timetreeUid: se.timetreeUid,
+          googleEventId: event.googleEventId,
+          timetreeUid: event.timetreeUid,
         });
       }
     }
 
-    return { toCreate, toUpdate, toDelete };
+    return {
+      toCreate,
+      toUpdate,
+      toDelete,
+    };
   }
 
   async applyDiff(diff: SyncDiff): Promise<SyncResult> {
-    if (process.env.SYNC_DRY_RUN !== "false") {
-      console.log(
-        "DRY RUN: no se han creado, actualizado ni eliminado eventos."
-      );
+    if (
+      process.env.SYNC_DRY_RUN !== "false" ||
+      process.env.SYNC_ENABLE_WRITE !== "YES_I_APPROVE"
+    ) {
+      console.log("DRY RUN: no changes made.");
 
       return {
         created: 0,
@@ -93,53 +102,40 @@ export class SyncEngine {
       try {
         await this.gcal.createEvent(event);
         result.created++;
-
-        console.log(`  Created: ${event.summary}`);
-      } catch (err) {
+        console.log(`Created: ${event.summary}`);
+      } catch (error) {
         result.errors++;
-
         console.error(
-          `  Failed to create "${event.summary}":`,
-          err
+          `Failed to create "${event.summary}":`,
+          error
         );
       }
     }
 
-    for (const { source, googleEventId } of diff.toUpdate) {
+    for (const item of diff.toUpdate) {
       try {
-        await this.gcal.updateEvent(googleEventId, source);
+        await this.gcal.updateEvent(
+          item.googleEventId,
+          item.source
+        );
+
         result.updated++;
-
-        console.log(`  Updated: ${source.summary}`);
-      } catch (err) {
+        console.log(
+          `Updated: ${item.source.summary}`
+        );
+      } catch (error) {
         result.errors++;
-
         console.error(
-          `  Failed to update "${source.summary}":`,
-          err
+          `Failed to update "${item.source.summary}":`,
+          error
         );
       }
     }
 
-    if (process.env.ALLOW_DELETIONS === "true") {
-      for (const { googleEventId, timetreeUid } of diff.toDelete) {
-        try {
-          await this.gcal.deleteEvent(googleEventId);
-          result.deleted++;
-
-          console.log(`  Deleted: ${timetreeUid}`);
-        } catch (err) {
-          result.errors++;
-
-          console.error(
-            `  Failed to delete "${timetreeUid}":`,
-            err
-          );
-        }
-      }
-    } else if (diff.toDelete.length > 0) {
+    // Las eliminaciones están desactivadas por seguridad.
+    if (diff.toDelete.length > 0) {
       console.log(
-        `  Skipped ${diff.toDelete.length} deletions (ALLOW_DELETIONS is not true).`
+        `Skipped ${diff.toDelete.length} deletions.`
       );
     }
 
