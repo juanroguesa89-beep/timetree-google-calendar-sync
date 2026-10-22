@@ -53,10 +53,14 @@ function parameterValueToString(value: ParameterValue | undefined): string {
 }
 
 function extractRecurrence(vevent: VEvent): string[] {
-  const rules: string[] = [];
-  if (vevent.rrule) {
-    const rruleStr = vevent.rrule.toString();
-    if (rruleStr) rules.push(rruleStr.startsWith("RRULE:") ? rruleStr : `RRULE:${rruleStr}`);
-  }
+  if (!vevent.rrule) return [];
+
+  const raw = vevent.rrule.toString();
+
+  const rules = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("RRULE:"));
+
   return rules;
 }
