@@ -40,7 +40,10 @@ async function main(): Promise<void> {
     console.log("\nNo changes to sync.");
     return;
   }
-
+if (process.env.SYNC_DRY_RUN !== "false") {
+  console.log("\nDRY RUN: simulación completada. No se ha modificado Google Calendar.");
+  return;
+}
   console.log("\nApplying changes...");
   const result = await engine.applyDiff(diff);
   console.log(`\nSync complete: created=${result.created}, updated=${result.updated}, deleted=${result.deleted}, errors=${result.errors}`);
