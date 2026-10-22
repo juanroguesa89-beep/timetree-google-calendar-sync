@@ -36,10 +36,16 @@ export class GCalClient {
   ) {
     const auth = new GoogleAuth({
       credentials,
-      scopes: ["https://www.googleapis.com/auth/calendar"],
+      scopes: [
+        "https://www.googleapis.com/auth/calendar",
+      ],
     });
 
-    this.calendar = google.calendar({ version: "v3", auth });
+    this.calendar = google.calendar({
+      version: "v3",
+      auth,
+    });
+
     this.calendarId = calendarId;
   }
 
@@ -50,7 +56,9 @@ export class GCalClient {
     do {
       const res = await this.calendar.events.list({
         calendarId: this.calendarId,
-        privateExtendedProperty: [`syncedBy=${SYNC_TAG}`],
+        privateExtendedProperty: [
+          `syncedBy=${SYNC_TAG}`,
+        ],
         maxResults: 2500,
         pageToken,
         showDeleted: false,
@@ -58,25 +66,30 @@ export class GCalClient {
       });
 
       for (const item of res.data.items ?? []) {
-        const props = item.extendedProperties?.private ?? {};
+        const props =
+          item.extendedProperties?.private ?? {};
 
         if (props.timetreeUid && item.id) {
           events.push({
             googleEventId: item.id,
             timetreeUid: props.timetreeUid,
-            lastModified: props.timetreeLastModified ?? "",
+            lastModified:
+              props.timetreeLastModified ?? "",
             colorId: item.colorId ?? "",
           });
         }
       }
 
-      pageToken = res.data.nextPageToken ?? undefined;
+      pageToken =
+        res.data.nextPageToken ?? undefined;
     } while (pageToken);
 
     return events;
   }
 
-  async createEvent(event: CalendarEvent): Promise<string> {
+  async createEvent(
+    event: CalendarEvent
+  ): Promise<string> {
     const res = await this.calendar.events.insert({
       calendarId: this.calendarId,
       requestBody: this.toGCalEvent(event),
@@ -96,7 +109,9 @@ export class GCalClient {
     });
   }
 
-  async deleteEvent(googleEventId: string): Promise<void> {
+  async deleteEvent(
+    googleEventId: string
+  ): Promise<void> {
     await this.calendar.events.delete({
       calendarId: this.calendarId,
       eventId: googleEventId,
@@ -106,11 +121,23 @@ export class GCalClient {
   private toGCalEvent(
     event: CalendarEvent
   ): calendar_v3.Schema$Event {
+    const category = (event.category ?? "").trim();
+
+    const description = [
+      event.description,
+      category
+        ? `Categoría TimeTree: ${category}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
     const body: calendar_v3.Schema$Event = {
       summary: event.summary,
-      description: event.description || undefined,
+      description: description || undefined,
       location: event.location || undefined,
       colorId: getGoogleColorId(event),
+
       extendedProperties: {
         private: {
           syncedBy: SYNC_TAG,
@@ -122,13 +149,19 @@ export class GCalClient {
     };
 
     if (event.allDay) {
-      body.start = { date: formatDate(event.start) };
-      body.end = { date: formatDate(event.end) };
+      body.start = {
+        date: formatDate(event.start),
+      };
+
+      body.end = {
+        date: formatDate(event.end),
+      };
     } else {
       body.start = {
         dateTime: event.start.toISOString(),
         timeZone: "Europe/Madrid",
       };
+
       body.end = {
         dateTime: event.end.toISOString(),
         timeZone: "Europe/Madrid",
