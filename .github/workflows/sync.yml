@@ -57,7 +57,10 @@ jobs:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/google-credentials.json
 
-          SYNC_DRY_RUN: "false"
+          # SIMULACIÓN: no modificar Google Calendar
+          SYNC_DRY_RUN: "true"
+
+          # Protección adicional
           SYNC_ENABLE_WRITE: "YES_I_APPROVE"
           ALLOW_DELETIONS: "false"
 
