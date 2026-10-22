@@ -101,8 +101,15 @@ export class GCalClient {
       body.start = { date: formatDate(event.start) };
       body.end = { date: formatDate(event.end) };
     } else {
-      body.start = { dateTime: event.start.toISOString() };
-      body.end = { dateTime: event.end.toISOString() };
+  body.start = {
+    dateTime: event.start.toISOString(),
+    timeZone: "Europe/Madrid",
+  };
+  body.end = {
+    dateTime: event.end.toISOString(),
+    timeZone: "Europe/Madrid",
+  };
+}
     }
     if (event.recurrence.length > 0) body.recurrence = event.recurrence;
     return body;
