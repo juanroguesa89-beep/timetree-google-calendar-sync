@@ -112,6 +112,11 @@ export class GCalClient {
 }
     }
     if (event.recurrence.length > 0) body.recurrence = event.recurrence;
+      const colorId = getGoogleColorId(event.category ?? "");
+
+if (colorId) {
+  body.colorId = colorId;
+}
     return body;
   }
 }
