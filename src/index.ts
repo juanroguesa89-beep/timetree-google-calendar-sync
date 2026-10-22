@@ -6,7 +6,8 @@ import { parseIcsFile } from "./ics-parser.js";
 import { GCalClient } from "./gcal-client.js";
 import { SyncEngine } from "./sync-engine.js";
 
-const MAX_OPERATIONS = 100;
+// Máximo de operaciones por ejecución automática.
+const MAX_OPERATIONS = 250;
 
 async function main(): Promise<void> {
   console.log("=== TimeTree → Google Calendar Sync ===\n");
@@ -14,6 +15,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
 
   console.log("Exporting events from TimeTree...");
+
   execFileSync(
     "timetree-exporter",
     [
@@ -34,24 +36,47 @@ async function main(): Promise<void> {
     throw new Error("ICS file not found.");
   }
 
+  console.log("Parsing ICS file...");
+
   const events = parseIcsFile(config.icsFilePath);
 
   if (events.length === 0) {
-    throw new Error("Empty ICS export. Aborting.");
+    throw new Error(
+      "Empty ICS export. Synchronization aborted."
+    );
   }
 
   console.log(`TimeTree events: ${events.length}`);
+
+  const withoutCategory = events.filter(
+    (event) => !event.category || !event.color
+  ).length;
+
+  if (withoutCategory > 0) {
+    console.warn(
+      `WARNING: ${withoutCategory} events lack category or color.`
+    );
+  }
 
   const gcal = new GCalClient(
     config.googleCredentials,
     config.googleCalendarId
   );
 
+  console.log("Fetching synced events from Google Calendar...");
+
   const syncedEvents = await gcal.listSyncedEvents();
-  console.log(`Google synced events: ${syncedEvents.length}`);
+
+  console.log(
+    `Google synced events: ${syncedEvents.length}`
+  );
 
   const engine = new SyncEngine(gcal);
-  const diff = engine.computeDiff(events, syncedEvents);
+
+  const diff = engine.computeDiff(
+    events,
+    syncedEvents
+  );
 
   console.log(
     `Pending: ${diff.toCreate.length} creates, ` +
@@ -59,18 +84,26 @@ async function main(): Promise<void> {
     `${diff.toDelete.length} deletions`
   );
 
+  // Simulación activada por defecto.
   if (process.env.SYNC_DRY_RUN !== "false") {
     console.log("DRY RUN: no changes made.");
     return;
   }
 
-  if (process.env.SYNC_ENABLE_WRITE !== "YES_I_APPROVE") {
-    throw new Error("Write authorization missing.");
+  // Autorización adicional para modificar Google Calendar.
+  if (
+    process.env.SYNC_ENABLE_WRITE !== "YES_I_APPROVE"
+  ) {
+    throw new Error(
+      "Writes blocked: authorization missing."
+    );
   }
 
-  // Se procesan como máximo 100 operaciones por ejecución.
-  // Las eliminaciones permanecen desactivadas.
-  const toCreate = diff.toCreate.slice(0, MAX_OPERATIONS);
+  // Limitar el número de operaciones por ejecución.
+  const toCreate = diff.toCreate.slice(
+    0,
+    MAX_OPERATIONS
+  );
 
   const remainingCapacity =
     MAX_OPERATIONS - toCreate.length;
@@ -80,23 +113,35 @@ async function main(): Promise<void> {
     remainingCapacity
   );
 
+  // Nunca eliminar eventos automáticamente.
   const batch = {
     toCreate,
     toUpdate,
     toDelete: [],
   };
 
+  console.log("\n=== AUTOMATIC SYNC BATCH ===");
+
   console.log(
     `Processing batch: ${toCreate.length} creates, ` +
     `${toUpdate.length} updates, 0 deletions`
   );
 
+  if (
+    toCreate.length === 0 &&
+    toUpdate.length === 0
+  ) {
+    console.log("Calendar is up to date.");
+    return;
+  }
+
   const result = await engine.applyDiff(batch);
 
   console.log(
-    `Completed: created=${result.created}, ` +
+    `\nCompleted: created=${result.created}, ` +
     `updated=${result.updated}, ` +
-    `deleted=${result.deleted}, errors=${result.errors}`
+    `deleted=${result.deleted}, ` +
+    `errors=${result.errors}`
   );
 
   if (result.errors > 0) {
