@@ -122,3 +122,19 @@ function formatDate(date: Date): string {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
+function getGoogleColorId(category: string): string | undefined {
+  const colors: Record<string, string> = {
+    "BODAS/EVENTOS": "10",
+    "VIAJES": "7",
+    "DEPORTE": "9",
+    "TRABAJO JUANITO": "8",
+    "BASKET JUANI": "6",
+    "COSAS CASA / FURGOS": "3",
+    "TRABAJO CRIS": "4",
+    "CITAS": "11",
+    "GUARDIAS CRIS": "5",
+    "VACAS/FESTIVOS": "1",
+  };
+
+  return colors[category.trim().toUpperCase()];
+}
