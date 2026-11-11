@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 
 import { google, type calendar_v3 } from "googleapis";
 import { GoogleAuth } from "googleapis-common";
@@ -31,8 +32,7 @@ export function getGoogleColorId(
 export function getSourceSyncVersion(
   event: CalendarEvent
 ): string {
-  const modified = event.lastModified?.toISOString() ?? "";
-  return modified + VERSION_SUFFIX;
+  return createHash("sha256").update(JSON.stringify([event.summary, event.description, event.location, event.start.toISOString(), event.end.toISOString(), event.allDay, event.startTimeZone ?? "UTC", event.endTimeZone ?? "UTC", event.recurrence, event.category])).digest("hex");
 }
 
 export class GCalClient {
@@ -45,12 +45,13 @@ export class GCalClient {
   ) {
     const auth = new GoogleAuth({
       credentials,
-      scopes: ["https://www.googleapis.com/auth/calendar"],
+      scopes: ["https://www.googleapis.com/auth/calendar.events"],
     });
 
     this.calendar = google.calendar({
       version: "v3",
       auth,
+      timeout: 30000, retry: true, retryConfig: { retry: 3 },
     });
 
     this.calendarId = calendarId;
@@ -84,7 +85,7 @@ export class GCalClient {
           events.push({
             googleEventId: item.id,
             timetreeUid: props.timetreeUid,
-            lastModified: versionedModified,
+            lastModified: props.contentHash ?? versionedModified,
             colorId: item.colorId ?? "",
           });
         }
@@ -99,7 +100,7 @@ export class GCalClient {
   async createEvent(event: CalendarEvent): Promise<string> {
     const res = await this.calendar.events.insert({
       calendarId: this.calendarId,
-      requestBody: this.toGCalEvent(event),
+      requestBody: { ...this.toGCalEvent(event), id: createHash("sha256").update(event.uid).digest("hex") },
     });
 
     if (!res.data.id) {
@@ -141,13 +142,14 @@ export class GCalClient {
 
     const body: calendar_v3.Schema$Event = {
       summary: event.summary,
-      description: description || undefined,
-      location: event.location || undefined,
-      colorId: getGoogleColorId(event),
+      description: description || "",
+      location: event.location || "",
+      colorId: getGoogleColorId(event) ?? null,
 
       extendedProperties: {
         private: {
           syncedBy: SYNC_TAG,
+          contentHash: getSourceSyncVersion(event),
           timetreeUid: event.uid,
           timetreeLastModified:
             event.lastModified?.toISOString() ?? "",
@@ -162,27 +164,25 @@ export class GCalClient {
     } else {
       body.start = {
         dateTime: event.start.toISOString(),
-        timeZone: "Europe/Madrid",
+        timeZone: event.startTimeZone ?? "UTC",
       };
 
       body.end = {
         dateTime: event.end.toISOString(),
-        timeZone: "Europe/Madrid",
+        timeZone: event.endTimeZone ?? "UTC",
       };
     }
 
-    if (event.recurrence.length > 0) {
-      body.recurrence = event.recurrence;
-    }
+    body.recurrence = event.recurrence;
 
     return body;
   }
 }
 
 function formatDate(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
 
   return `${y}-${m}-${d}`;
 }

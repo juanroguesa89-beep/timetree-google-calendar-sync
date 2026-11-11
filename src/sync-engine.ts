@@ -1,6 +1,7 @@
 
 import {
   getGoogleColorId,
+  getSourceSyncVersion,
   type GCalClient,
 } from "./gcal-client.js";
 
@@ -21,6 +22,7 @@ export class SyncEngine {
     const syncedMap = new Map<string, SyncedEvent>();
 
     for (const event of syncedEvents) {
+      if (syncedMap.has(event.timetreeUid)) throw new Error("Duplicate destination UID; manual review required.");
       syncedMap.set(event.timetreeUid, event);
     }
 
@@ -29,6 +31,7 @@ export class SyncEngine {
     const toUpdate: SyncDiff["toUpdate"] = [];
 
     for (const event of sourceEvents) {
+      if (sourceUids.has(event.uid)) throw new Error("Duplicate source UID.");
       sourceUids.add(event.uid);
 
       const existing = syncedMap.get(event.uid);
@@ -39,7 +42,7 @@ export class SyncEngine {
       }
 
       const sourceModified =
-        event.lastModified?.toISOString() ?? "";
+        getSourceSyncVersion(event);
 
       const desiredColor = getGoogleColorId(event);
 
@@ -102,13 +105,10 @@ export class SyncEngine {
       try {
         await this.gcal.createEvent(event);
         result.created++;
-        console.log(`Created: ${event.summary}`);
+
       } catch (error) {
         result.errors++;
-        console.error(
-          `Failed to create "${event.summary}":`,
-          error
-        );
+        console.error("Create failed; details suppressed for privacy.");
       }
     }
 
@@ -120,15 +120,10 @@ export class SyncEngine {
         );
 
         result.updated++;
-        console.log(
-          `Updated: ${item.source.summary}`
-        );
+
       } catch (error) {
         result.errors++;
-        console.error(
-          `Failed to update "${item.source.summary}":`,
-          error
-        );
+        console.error("Update failed; details suppressed for privacy.");
       }
     }
 
