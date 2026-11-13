@@ -1,6 +1,6 @@
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync, appendFileSync } from "node:fs";
 import { loadConfig } from "./config.js";
 import { parseIcsFile } from "./ics-parser.js";
 import { GCalClient } from "./gcal-client.js";
@@ -8,6 +8,7 @@ import { SyncEngine } from "./sync-engine.js";
 
 // Máximo de operaciones por ejecución automática.
 const MAX_OPERATIONS = 250;
+let stage = "configuration";
 
 async function main(): Promise<void> {
   console.log("=== TimeTree → Google Calendar Sync ===\n");
@@ -16,19 +17,21 @@ async function main(): Promise<void> {
 
   console.log("Exporting events from TimeTree...");
 
+  stage = "source-export";
+  rmSync(config.icsFilePath, { force: true });
   execFileSync(
-    "timetree-exporter",
-    [
-      "-e", config.timetreeEmail,
-      "-c", config.timetreeCalendarCode,
-      "-o", config.icsFilePath,
-    ],
+    "python",
+    ["scripts/export.py"],
     {
       env: {
         ...process.env,
         TIMETREE_PASSWORD: config.timetreePassword,
+        ICS_FILE_PATH: config.icsFilePath,
+        TIMETREE_EXPORTER_DEVELOPER: "0",
       },
-      stdio: "inherit",
+      stdio: "pipe",
+      timeout: 180000,
+      maxBuffer: 8 * 1024 * 1024,
     }
   );
 
@@ -38,6 +41,7 @@ async function main(): Promise<void> {
 
   console.log("Parsing ICS file...");
 
+  stage = "source-validation";
   const events = parseIcsFile(config.icsFilePath);
 
   if (events.length === 0) {
@@ -65,6 +69,7 @@ async function main(): Promise<void> {
 
   console.log("Fetching synced events from Google Calendar...");
 
+  stage = "destination-read";
   const syncedEvents = await gcal.listSyncedEvents();
 
   console.log(
@@ -73,6 +78,7 @@ async function main(): Promise<void> {
 
   const engine = new SyncEngine(gcal);
 
+  stage = "planning";
   const diff = engine.computeDiff(
     events,
     syncedEvents
@@ -86,6 +92,7 @@ async function main(): Promise<void> {
 
   // Simulación activada por defecto.
   if (process.env.SYNC_DRY_RUN !== "false") {
+    report(0, 0, 0, events.length + diff.toDelete.length, 0);
     console.log("DRY RUN: no changes made.");
     return;
   }
@@ -98,6 +105,8 @@ async function main(): Promise<void> {
       "Writes blocked: authorization missing."
     );
   }
+
+  if (diff.toCreate.length + diff.toUpdate.length > MAX_OPERATIONS) throw new Error("Operation limit exceeded; no writes applied.");
 
   // Limitar el número de operaciones por ejecución.
   const toCreate = diff.toCreate.slice(
@@ -131,10 +140,12 @@ async function main(): Promise<void> {
     toCreate.length === 0 &&
     toUpdate.length === 0
   ) {
+    report(0, 0, 0, events.length + diff.toDelete.length, 0);
     console.log("Calendar is up to date.");
     return;
   }
 
+  stage = "writing";
   const result = await engine.applyDiff(batch);
 
   console.log(
@@ -144,12 +155,21 @@ async function main(): Promise<void> {
     `errors=${result.errors}`
   );
 
+  report(result.created, result.updated, result.deleted, events.length - diff.toCreate.length - diff.toUpdate.length + diff.toDelete.length, result.errors);
+
   if (result.errors > 0) {
     process.exitCode = 1;
   }
 }
 
 main().catch((error) => {
-  console.error("::error::Sync failed:", error);
+  console.error(`::error::Synchronization aborted at ${stage}; sensitive error details suppressed.`);
+  report(0, 0, 0, 0, 1);
   process.exitCode = 1;
 });
+
+function report(created: number, updated: number, deleted: number, skipped: number, errors: number): void {
+  const summary = `created=${created}, updated=${updated}, deleted=${deleted}, skipped=${skipped}, errors=${errors}`;
+  console.log(summary);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${summary}\n`);
+}
